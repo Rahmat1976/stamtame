@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Editor Stamp Foto GPS</title>
+<style>
+:root{--bg:#0f131a;--card:#1a212c;--line:#2a3444;--acc:#3ec1e0;--txt:#e8edf4}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 system-ui,Segoe UI,Arial}
+header{padding:14px 18px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:10px}
+header h1{font-size:17px;margin:0}
+header span{color:#8fa0b5;font-size:12px}
+.app{display:flex;flex-wrap:wrap;gap:16px;padding:16px;max-width:1500px;margin:0 auto}
+.stage{flex:1 1 620px;min-width:300px}
+.wrap{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#000}
+canvas{display:block;width:100%;height:auto;touch-action:none}
+.panel{flex:1 1 340px;max-width:430px;display:flex;flex-direction:column;gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+.card h2{margin:0 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:#9fb0c3}
+.row{display:flex;gap:8px;align-items:center;margin:8px 0;flex-wrap:wrap}
+.row label{min-width:80px;color:#aab8c9;font-size:12.5px}
+.row input[type=text],.row textarea,.row select{flex:1;min-width:110px}
+button{background:#243044;border:1px solid var(--line);color:var(--txt);padding:8px 12px;border-radius:9px;cursor:pointer;font-size:13px}
+button:hover{background:#2c3a52}
+button.primary{background:var(--acc);border-color:var(--acc);color:#06222b;font-weight:700}
+input[type=text],textarea,select{background:#111722;border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:7px 9px;font:inherit;width:100%}
+textarea{resize:vertical}
+input[type=range]{flex:1;accent-color:var(--acc)}
+input[type=color]{width:40px;height:30px;border:1px solid var(--line);border-radius:7px;background:#111722;padding:2px}
+input[type=checkbox]{accent-color:var(--acc);width:16px;height:16px}
+.nudge{display:flex;gap:6px}
+.nudge button{padding:4px 10px}
+.tip{color:#8fa0b5;font-size:12px;margin:2px 4px}
+</style>
+</head>
+<body>
+<header><h1>📍 Editor Stamp Foto GPS</h1><span>edit teks • kompas • peta • ekspor PNG/JPG</span></header>
+<div class="app">
+  <div class="stage"><div class="wrap"><canvas id="cv"></canvas></div>
+    <p class="tip">💡 Klik elemen di foto untuk memilih, lalu seret untuk memindahkan. Bisa juga tempel (Ctrl+V) atau jatuhkan (drop) foto ke kanvas.</p>
+  </div>
+  <div class="panel">
+    <div class="card"><h2>Foto</h2>
+      <div class="row">
+        <button class="primary" id="btnPhoto">📷 Pilih Foto</button>
+        <button id="btnSample">Muat Contoh</button>
+      </div>
+    </div>
+    <div class="card"><h2>Elemen Stempel</h2>
+      <select id="selEl"></select>
+      <div id="elControls"></div>
+    </div>
+    <div class="card"><h2>Simpan</h2>
+      <div class="row">
+        <button class="primary" id="btnPNG">⬇️ PNG</button>
+        <button id="btnJPG">⬇️ JPG</button>
+        <button id="btnReset">↺ Reset</button>
+      </div>
+    </div>
+  </div>
+</div>
+<input type="file" id="photoFile" accept="image/*" hidden>
+<script>
+/* ---------- Data default ---------- */
+function nowStr(){const d=new Date(),p=n=>String(n).padStart(2,'0');
+  return p(d.getDate())+'/'+p(d.getMonth()+1)+'/'+d.getFullYear()+' '+p(d.getHours())+':'+p(d.getMinutes());}
+const DEFAULTS={
+ compass:{name:'Kompas',type:'compass',x:.095,y:.075,size:13,rot:0,labels:true,visible:true},
+ map:{name:'Peta Mini',type:'map',x:.15,y:.868,size:26,border:true,pin:true,visible:true},
+ heading:{name:'Arah (derajat)',type:'text',single:true,text:'250° W',x:.98,y:.645,size:3.5,color:'#ffffff',align:'right',style:'shadow',visible:true},
+ address:{name:'Alamat',type:'text',text:'Jalan Raya Serang - Jakarta\nSukamaju\nKecamatan Kibin\nKabupaten Serang\nBanten',x:.98,y:.683,size:3.5,color:'#ffffff',align:'right',style:'shadow',visible:true},
+ data:{name:'Data (Alt/Speed)',type:'text',text:'Altitude:27.1msnm\nSpeed:1.8km/h',x:.98,y:.865,size:3.5,color:'#ffffff',align:'right',style:'shadow',visible:true},
+ note:{name:'Catatan / Hashtag',type:'text',single:true,text:'#SAMIAN B 9557 BYV',x:.98,y:.930,size:3.5,color:'#ffffff',align:'right',style:'shadow',visible:true},
+ index:{name:'Nomor Index',type:'text',single:true,text:'Index number: 7',x:.98,y:.968,size:3.5,color:'#ffffff',align:'right',style:'shadow',visible:true},
+ datetime:{name:'Tanggal & Jam',type:'text',single:true,text:nowStr(),x:.97,y:.035,size:3.5,color:'#ffffff',align:'right',style:'shadow',visible:true}
+};
+const ELS=JSON.parse(JSON.stringify(DEFAULTS));
+const ORDER=['map','compass','heading','address','data','note','index','datetime'];
+let selected='address', drag=null;
+const state={photo:null,W:1200,H:1600};
+const clamp01=v=>Math.min(1,Math.max(0,v));
+
+/* ---------- Elemen DOM ---------- */
+const cv=document.getElementById('cv'),wrap=document.querySelector('.wrap'),
+ selEl=document.getElementById('selEl'),elControls=document.getElementById('elControls'),
+ photoFile=document.getElementById('photoFile');
+
+for(const k in ELS){const o=document.createElement('option');o.value=k;o.textContent=ELS[k].name;selEl.appendChild(o);}
+selEl.onchange=()=>select(selEl.value);
+
+/* ---------- Muat foto ---------- */
+function loadPhoto(file){const img=new Image();
+ img.onload=()=>{let src=img,w=img.naturalWidth,h=img.naturalHeight;const MAX=2600;
+  if(Math.max(w,h)>MAX){const s=MAX/Math.max(w,h),c=document.createElement('canvas');
+   c.width=Math.round(w*s);c.height=Math.round(h*s);
+   c.getContext('2d').drawImage(img,0,0,c.width,c.height);src=c;w=c.width;h=c.height;}
+  state.photo=src;state.W=w;state.H=h;render();};
+ img.src=URL.createObjectURL(file);}
+photoFile.onchange=()=>{if(photoFile.files[0])loadPhoto(photoFile.files[0]);};
+document.getElementById('btnPhoto').onclick=()=>photoFile.click();
+['dragover','drop'].forEach(t=>cv.addEventListener(t,e=>{e.preventDefault();
+ if(t==='drop'){const f=e.dataTransfer.files[0];if(f&&f.type.startsWith('image/'))loadPhoto(f);}}));
+window.addEventListener('paste',e=>{for(const it of(e.clipboardData?.items||[]))
+ if(it.type.startsWith('image/'))loadPhoto(it.getAsFile());});
+
+/* ---------- Gambar ---------- */
+function rr(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);
+ c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
+
+function drawText(c,el,W,H){const fs=el.size/100*W,lh=fs*1.28,lines=el.text.split('\n');
+ c.font='bold '+fs+'px Arial,Helvetica,sans-serif';
+ c.textAlign=el.align==='right'?'right':el.align==='center'?'center':'left';
+ c.textBaseline='alphabetic';
+ const x=el.x*W,y0=el.y*H;let wMax=0;
+ lines.forEach(l=>wMax=Math.max(wMax,c.measureText(l).width));
+ lines.forEach((ln,i)=>{const by=y0+i*lh+fs*.88;
+  if(el.style==='shadow'){c.shadowColor='rgba(0,0,0,.85)';c.shadowBlur=fs*.25;c.shadowOffsetY=fs*.08;
+   c.fillStyle=el.color;c.fillText(ln,x,by);c.shadowColor='transparent';c.shadowBlur=0;c.shadowOffsetY=0;}
+  else if(el.style==='outline'){c.lineJoin='round';c.lineWidth=Math.max(2,fs*.14);
+   c.strokeStyle='rgba(0,0,0,.9)';c.strokeText(ln,x,by);c.fillStyle=el.color;c.fillText(ln,x,by);}
+  else{c.fillStyle=el.color;c.fillText(ln,x,by);}});
+ const bx=el.align==='right'?x-wMax:el.align==='center'?x-wMax/2:x;
+ el._box={x:bx,y:y0,w:wMax,h:lines.length*lh};}
+
+function drawCompass(c,el,W,H){const r=el.size/100*W/2,cx=el.x*W,cy=el.y*H;
+ c.save();c.translate(cx,cy);
+ c.beginPath();c.arc(0,0,r,0,7);c.fillStyle='rgba(70,74,80,.55)';c.fill();
+ c.beginPath();c.arc(0,0,r*.86,0,7);c.fillStyle='rgba(22,24,28,.92)';c.fill();
+ c.strokeStyle='rgba(255,255,255,.5)';c.lineWidth=Math.max(1,r*.03);
+ for(let i=0;i<12;i++){const a=i*30*Math.PI/180;
+  c.beginPath();c.moveTo(Math.cos(a)*r*.9,Math.sin(a)*r*.9);
+  c.lineTo(Math.cos(a)*r*.97,Math.sin(a)*r*.97);c.stroke();}
+ if(el.labels){const L=['N','E','S','W'];c.fillStyle='#fff';
+  c.font='bold '+r*.36+'px Arial';c.textAlign='center';c.textBaseline='middle';
+  for(let i=0;i<4;i++){const a=(-90+el.rot+i*90)*Math.PI/180;
+   c.fillText(L[i],Math.cos(a)*r*.66,Math.sin(a)*r*.66);}}
+ c.fillStyle='#41c9e8';c.beginPath();c.moveTo(0,-r*.58);c.lineTo(r*.14,r*.12);
+ c.lineTo(-r*.14,r*.12);c.closePath();c.fill();
+ c.fillStyle='#dfe3e8';c.beginPath();c.moveTo(0,r*.58);c.lineTo(r*.11,r*.08);
+ c.lineTo(-r*.11,r*.08);c.closePath();c.fill();
+ c.beginPath();c.arc(0,0,r*.09,0,7);c.fillStyle='#39424d';c.fill();
+ c.restore();el._box={x:cx-r,y:cy-r,w:2*r,h:2*r};}
+
+function drawMap(c,el,W,H){const w=el.size/100*W;
+ let h=el.img?w*el.img.naturalHeight/el.img.naturalWidth:w*.75;
+ const cx=el.x*W,cy=el.y*H,x=cx-w/2,y=cy-h/2,rad=Math.min(w,h)*.05;
+ c.save();if(el.border){c.shadowColor='rgba(0,0,0,.5)';c.shadowBlur=w*.06;c.shadowOffsetY=w*.02;}
+ rr(c,x,y,w,h,rad);c.fillStyle='#20303c';c.fill();c.restore();
+ c.save();rr(c,x,y,w,h,rad);c.clip();
+ if(el.img)c.drawImage(el.img,x,y,w,h);
+ else{c.fillStyle='#dbe7ee';c.fillRect(x,y,w,h);
+  c.strokeStyle='#b9cbd6';c.lineWidth=Math.max(1,w*.01);
+  for(let i=1;i<4;i++){c.beginPath();c.moveTo(x+w*i/4,y);c.lineTo(x+w*i/4,y+h);c.stroke();
+   c.beginPath();c.moveTo(x,y+h*i/4);c.lineTo(x+w,y+h*i/4);c.stroke();}
+  c.fillStyle='#5b7383';c.font='bold '+w*.09+'px Arial';c.textAlign='center';
+  c.textBaseline='middle';c.fillText('PETA',cx,cy);}
+ c.restore();
+ if(el.pin){const pr=w*.06;c.save();c.shadowColor='rgba(0,0,0,.45)';c.shadowBlur=pr*.6;
+  c.fillStyle='#e03b3b';c.beginPath();c.arc(cx,cy-pr*.4,pr,0,7);c.fill();
+  c.beginPath();c.moveTo(cx-pr*.75,cy-pr*.15);c.lineTo(cx+pr*.75,cy-pr*.15);
+  c.lineTo(cx,cy+pr*1.05);c.closePath();c.fill();
+  c.fillStyle='#fff';c.beginPath();c.arc(cx,cy-pr*.4,pr*.42,0,7);c.fill();c.restore();}
+ if(el.border){c.strokeStyle='rgba(255,255,255,.9)';c.lineWidth=Math.max(1.5,w*.012);
+  rr(c,x,y,w,h,rad);c.stroke();}
+ el._box={x,y,w,h};}
+
+function drawAll(c,W,H,exporting){
+ if(state.photo)c.drawImage(state.photo,0,0,W,H);
+ else{c.save();const g=c.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#aebfc9');g.addColorStop(.55,'#93a3ad');g.addColorStop(1,'#6d7b85');
+  c.fillStyle=g;c.fillRect(0,0,W,H);
+  c.fillStyle='rgba(255,255,255,.85)';c.font='bold '+W*.05+'px Arial';
+  c.textAlign='center';c.textBaseline='middle';
+  c.fillText('Unggah / tempel foto di sini',W/2,H/2);c.restore();}
+ for(const id of ORDER){const el=ELS[id];if(!el.visible)continue;
+  if(el.type==='compass')drawCompass(c,el,W,H);
+  else if(el.type==='map')drawMap(c,el,W,H);
+  else drawText(c,el,W,H);}
+ if(!exporting&&selected&&ELS[selected].visible&&ELS[selected]._box){
+  const b=ELS[selected]._box;c.save();c.strokeStyle='#3ec1e0';
+  c.lineWidth=Math.max(2,W*.003);c.setLineDash([W*.012,W*.008]);
+  c.strokeRect(b.x,b.y,b.w,b.h);c.restore();}}
+
+function render(){const{W,H}=state,cssW=wrap.clientWidth||800,dpr=window.devicePixelRatio||1;
+ cv.width=Math.round(cssW*dpr);cv.height=Math.round(cssW*H/W*dpr);
+ const c=cv.getContext('2d'),s=cv.width/W;
+ c.setTransform(s,0,0,s,0,0);drawAll(c,W,H,false);}
+
+/* ---------- Drag & pilih ---------- */
+function pos(e){const r=cv.getBoundingClientRect();
+ return{mx:(e.clientX-r.left)*state.W/r.width,my:(e.clientY-r.top)*state.H/r.height};}
+function hit(mx,my){for(let i=ORDER.length-1;i>=0;i--){const el=ELS[ORDER[i]];
+ if(!el.visible||!el._box)continue;const b=el._box,p=state.W*.012;
+ if(mx>=b.x-p&&mx<=b.x+b.w+p&&my>=b.y-p&&my<=b.y+b.h+p)return ORDER[i];}return null;}
+cv.addEventListener('pointerdown',e=>{const{mx,my}=pos(e),id=hit(mx,my);
+ if(id){select(id);drag={id,mx,my,ox:ELS[id].x,oy:ELS[id].y};cv.setPointerCapture(e.pointerId);}});
+cv.addEventListener('pointermove',e=>{
+ if(drag){const{mx,my}=pos(e),el=ELS[drag.id];
+  el.x=clamp01(drag.ox+(mx-drag.mx)/state.W);
+  el.y=clamp01(drag.oy+(my-drag.my)/state.H);render();}
+ else{const{mx,my}=pos(e);cv.style.cursor=hit(mx,my)?'grab':'default';}});
+['pointerup','pointercancel'].forEach(t=>cv.addEventListener(t,()=>drag=null));
+
+/* ---------- Panel kontrol ---------- */
+function row(label,...nodes){const d=document.createElement('div');d.className='row';
+ const l=document.createElement('label');l.textContent=label;d.append(l,...nodes);
+ elControls.appendChild(d);return d;}
+function chk(v,on){const i=document.createElement('input');i.type='checkbox';i.checked=v;
+ i.addEventListener('change',()=>on(i.checked));return i;}
+function range(v,mi,ma,st,on){const i=document.createElement('input');i.type='range';
+ i.min=mi;i.max=ma;i.step=st;i.value=v;i.addEventListener('input',()=>on(parseFloat(i.value)));return i;}
+function colorInp(v,on){const i=document.createElement('input');i.type='color';i.value=v;
+ i.addEventListener('input',()=>on(i.value));return i;}
+function selectInp(map,v,on){const s=document.createElement('select');
+ for(const k in map){const o=document.createElement('option');o.value=k;o.textContent=map[k];
+  if(k===v)o.selected=true;s.appendChild(o);}
+ s.addEventListener('change',()=>on(s.value));return s;}
+function nudge(){const w=document.createElement('div');w.className='nudge';
+ [['←','x',-.005],['→','x',.005],['↑','y',-.005],['↓','y',.005]].forEach(([t,ax,d])=>{
+  const b=document.createElement('button');b.textContent=t;
+  b.onclick=()=>{ELS[selected][ax]=clamp01(ELS[selected][ax]+d);render();};w.appendChild(b);});return w;}
+
+const mapFile=document.createElement('input');mapFile.type='file';mapFile.accept='image/*';
+mapFile.onchange=()=>{const f=mapFile.files[0];if(!f)return;const im=new Image();
+ im.onload=()=>{ELS.map.img=im;render();};im.src=URL.createObjectURL(f);};
+
+function buildPanel(){const el=ELS[selected];elControls.innerHTML='';
+ row('Tampil',chk(el.visible,v=>{el.visible=v;render();}));
+ if(el.type==='text'){
+  let inp;
+  if(el.single){inp=document.createElement('input');inp.type='text';}
+  else{inp=document.createElement('textarea');inp.rows=5;}
+  inp.value=el.text;inp.addEventListener('input',()=>{el.text=inp.value;render();});
+  const r=row('Teks',inp);
+  if(selected==='datetime'){const b=document.createElement('button');b.textContent='Sekarang';
+   b.onclick=()=>{el.text=nowStr();buildPanel();render();};r.appendChild(b);}
+  row('Ukuran',range(el.size,1.5,10,.1,v=>{el.size=v;render();}));
+  row('Warna',colorInp(el.color,v=>{el.color=v;render();}));
+  row('Rata',selectInp({kiri:'Kiri',tengah:'Tengah',kanan:'Kanan'},el.align,v=>{el.align=v;render();}));
+  row('Gaya',selectInp({shadow:'Bayangan',outline:'Outline',plain:'Polos'},el.style,v=>{el.style=v;render();}));
+ }else if(el.type==='compass'){
+  row('Ukuran',range(el.size,6,30,.5,v=>{el.size=v;render();}));
+  row('Putaran',range(el.rot,-180,180,1,v=>{el.rot=v;render();}));
+  row('Huruf N/E/S/W',chk(el.labels,v=>{el.labels=v;render();}));
+ }else if(el.type==='map'){
+  const b=document.createElement('button');b.textContent='Pilih gambar peta…';
+  b.onclick=()=>mapFile.click();row('Gambar',b);
+  row('Lebar',range(el.size,10,45,.5,v=>{el.size=v;render();}));
+  row('Bingkai',chk(el.border,v=>{el.border=v;render();}));
+  row('Pin merah',chk(el.pin,v=>{el.pin=v;render();}));}
+ row('Geser',nudge());}
+
+function select(id){selected=id;selEl.value=id;buildPanel();render();}
+
+/* ---------- Simpan & reset ---------- */
+function download(type){const c=document.createElement('canvas');c.width=state.W;c.height=state.H;
+ const cx=c.getContext('2d');
+ if(type==='image/jpeg'){cx.fillStyle='#fff';cx.fillRect(0,0,state.W,state.H);}
+ drawAll(cx,state.W,state.H,true);
+ const a=document.createElement('a');a.download='stamp-'+Date.now()+(type==='image/png'?'.png':'.jpg');
+ a.href=c.toDataURL(type,.92);a.click();}
+document.getElementById('btnPNG').onclick=()=>download('image/png');
+document.getElementById('btnJPG').onclick=()=>download('image/jpeg');
+document.getElementById('btnReset').onclick=()=>{for(const k in ELS)
+ ['x','y','size','rot'].forEach(p=>{if(DEFAULTS[k][p]!==undefined)ELS[k][p]=DEFAULTS[k][p];});render();};
+document.getElementById('btnSample').onclick=()=>{
+ const d=JSON.parse(JSON.stringify(DEFAULTS));d.datetime.text=nowStr();d.map.img=null;
+ for(const k in ELS)Object.assign(ELS[k],d[k]);select('address');};
+
+let raf;window.addEventListener('resize',()=>{cancelAnimationFrame(raf);raf=requestAnimationFrame(render);});
+buildPanel();render();
+</script>
+</body>
+</html>
